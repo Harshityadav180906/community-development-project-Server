@@ -266,6 +266,15 @@ router.get('/my-claims', protect, authorizeRoles('ngo'), async (req, res) => {
       .populate('assignedDriver', 'name phone vehicleType vehicleNumber currentLocation')
       .sort({ updatedAt: -1, createdAt: -1 });
 
+    // Ensure all claims have a persisted, stable deliveryOtp
+    for (const claim of claims) {
+      if (!claim.deliveryOtp || claim.deliveryOtp.trim() === '') {
+        const stableOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        claim.deliveryOtp = stableOtp;
+        await FoodListing.updateOne({ _id: claim._id }, { $set: { deliveryOtp: stableOtp } });
+      }
+    }
+
     return res.json({
       success: true,
       count: claims.length,

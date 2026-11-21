@@ -116,9 +116,8 @@ const foodListingSchema = new mongoose.Schema(
     // Delivery Handover Verification OTP (shared with NGO)
     deliveryOtp: {
       type: String,
-      default: function () {
-        return Math.floor(1000 + Math.random() * 9000).toString();
-      },
+      default: '',
+      trim: true,
     },
     otpVerified: {
       type: Boolean,
@@ -187,6 +186,14 @@ const foodListingSchema = new mongoose.Schema(
 foodListingSchema.index({ status: 1, foodType: 1, locality: 1 });
 foodListingSchema.index({ expiresAt: 1 });
 foodListingSchema.index({ assignedDriver: 1 });
+
+// Ensure unique, stable 4-digit handover OTP is generated and persisted on save
+foodListingSchema.pre('save', function (next) {
+  if (!this.deliveryOtp || this.deliveryOtp.trim() === '') {
+    this.deliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
+  }
+  next();
+});
 
 const FoodListing = mongoose.model('FoodListing', foodListingSchema);
 module.exports = FoodListing;

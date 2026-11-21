@@ -3,6 +3,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const connectDB = require('./config/db');
 const User = require('./models/User');
+const FoodListing = require('./models/FoodListing');
 const { seedDatabase } = require('./utils/seedData');
 
 // Load environment variables
@@ -88,6 +89,15 @@ connectDB().then(async () => {
       console.log('🌱 Empty database detected! Auto-seeding demo donors, NGOs, and food listings...');
       await seedDatabase(false);
       console.log('✅ Auto-seed completed successfully!');
+    } else {
+      // Ensure all listings have stable deliveryOtp and payoutAmount persisted in Mongo
+      const listingsWithoutOtp = await FoodListing.find({
+        $or: [{ deliveryOtp: { $exists: false } }, { deliveryOtp: '' }, { deliveryOtp: null }],
+      });
+      for (const l of listingsWithoutOtp) {
+        const stableOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        await FoodListing.updateOne({ _id: l._id }, { $set: { deliveryOtp: stableOtp, payoutAmount: 15 } });
+      }
     }
   } catch (err) {
     console.warn('[AutoSeed Notice]:', err.message);

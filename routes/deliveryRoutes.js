@@ -22,6 +22,15 @@ router.get('/me/assigned', protect, authorizeRoles('delivery'), async (req, res)
       .populate('assignedDriver', 'name phone vehicleType vehicleNumber currentLocation walletBalance')
       .sort({ updatedAt: -1 });
 
+    // Ensure all active missions have a persisted, stable deliveryOtp
+    for (const mission of activeMissions) {
+      if (!mission.deliveryOtp || mission.deliveryOtp.trim() === '') {
+        const stableOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        mission.deliveryOtp = stableOtp;
+        await FoodListing.updateOne({ _id: mission._id }, { $set: { deliveryOtp: stableOtp } });
+      }
+    }
+
     return res.json({
       success: true,
       count: activeMissions.length,
@@ -292,8 +301,15 @@ router.post('/:id/verify-otp', protect, authorizeRoles('delivery'), async (req, 
       return res.status(403).json({ message: 'Forbidden: You are not assigned to this rescue mission.' });
     }
 
-    // Verify OTP match
-    if (listing.deliveryOtp && listing.deliveryOtp.trim() !== otp.toString().trim()) {
+    // Verify OTP match (safe, trimmed, and persistent)
+    const storedOtp = (listing.deliveryOtp || '').trim();
+    const enteredOtp = otp.toString().trim();
+
+    if (!storedOtp) {
+      // If legacy document had empty OTP, persist entered OTP
+      listing.deliveryOtp = enteredOtp;
+      await listing.save();
+    } else if (storedOtp !== enteredOtp) {
       return res.status(400).json({
         success: false,
         message: 'Invalid OTP! Please check the code displayed on the NGO portal or SMS.',
