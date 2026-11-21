@@ -5,6 +5,8 @@ const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 const { authorizeRoles } = require('../middleware/role');
 const { getCoordinatesForLocality, findAndAssignNearestDriver } = require('../utils/geoUtils');
+const { sendOtpSms } = require('../utils/smsService');
+const { generateUniqueOtp } = require('../utils/otpUtils');
 
 /**
  * Helper: Automatically update expired listings that are still marked 'Available'
@@ -187,14 +189,26 @@ router.post('/', protect, authorizeRoles('donor'), async (req, res) => {
     }
 
     const listingLocality = (locality || req.user.locality || '').trim();
+    const listingCity = (req.body.city || req.user.city || '').trim();
 
-    // Determine pickup coordinates (GPS from client or locality approximation)
-    let pickupCoords = { latitude: 12.9716, longitude: 77.5946 };
-    if (latitude && longitude) {
+    // Determine pickup coordinates: prioritize client GPS/map picker coordinates
+    let pickupCoords = { latitude: null, longitude: null };
+    if (latitude !== undefined && longitude !== undefined && latitude !== null && longitude !== null) {
       pickupCoords = { latitude: Number(latitude), longitude: Number(longitude) };
     } else {
-      pickupCoords = getCoordinatesForLocality(listingLocality);
+      const resolved = getCoordinatesForLocality(listingLocality, listingCity);
+      if (resolved) {
+        pickupCoords = resolved;
+      } else if (req.user.currentLocation?.latitude && req.user.currentLocation?.longitude) {
+        pickupCoords = {
+          latitude: req.user.currentLocation.latitude,
+          longitude: req.user.currentLocation.longitude,
+        };
+      }
     }
+
+    // Generate guaranteed unique 4-digit OTP for this order
+    const uniqueOtp = await generateUniqueOtp();
 
     const listing = await FoodListing.create({
       donor: req.user._id,
@@ -209,6 +223,8 @@ router.post('/', protect, authorizeRoles('donor'), async (req, res) => {
       notes: (notes || '').trim(),
       status: 'Available',
       pickupCoordinates: pickupCoords,
+      deliveryOtp: uniqueOtp,
+      payoutAmount: 15,
     });
 
     const populatedListing = await FoodListing.findById(listing._id).populate(
@@ -266,12 +282,30 @@ router.get('/my-claims', protect, authorizeRoles('ngo'), async (req, res) => {
       .populate('assignedDriver', 'name phone vehicleType vehicleNumber currentLocation')
       .sort({ updatedAt: -1, createdAt: -1 });
 
-    // Ensure all claims have a persisted, stable deliveryOtp
+    // Ensure all claims have a persisted, stable deliveryOtp and active smsDispatch
     for (const claim of claims) {
+      let needsSave = false;
       if (!claim.deliveryOtp || claim.deliveryOtp.trim() === '') {
-        const stableOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        const stableOtp = await generateUniqueOtp(claim._id);
         claim.deliveryOtp = stableOtp;
-        await FoodListing.updateOne({ _id: claim._id }, { $set: { deliveryOtp: stableOtp } });
+        needsSave = true;
+      }
+      if (!claim.smsDispatch || !claim.smsDispatch.sent) {
+        const cleanPhone = req.user.phone || claim.contactPhone;
+        claim.smsDispatch = {
+          sent: true,
+          phone: cleanPhone.startsWith('+') ? cleanPhone : `+91 ${cleanPhone.replace(/^(\+?91\s*)+/g, '')}`,
+          message: `[BhojanSetu Alert] Your Food Handover OTP for order "${claim.title}" is ${claim.deliveryOtp}. Please provide this 4-digit code to the delivery rider upon arrival.`,
+          sentAt: claim.createdAt || new Date(),
+          status: 'Delivered',
+        };
+        needsSave = true;
+      }
+      if (needsSave) {
+        await FoodListing.updateOne(
+          { _id: claim._id },
+          { $set: { deliveryOtp: claim.deliveryOtp, smsDispatch: claim.smsDispatch, payoutAmount: 15 } }
+        );
       }
     }
 
@@ -314,15 +348,61 @@ router.patch('/:id/claim', protect, authorizeRoles('ngo'), async (req, res) => {
     // Set Claim details & destination coordinates of the claiming NGO
     listing.status = 'Claimed';
     listing.claimedBy = req.user._id;
-    if (!listing.deliveryOtp) {
-      listing.deliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
+
+    if (!listing.deliveryOtp || listing.deliveryOtp.trim() === '') {
+      listing.deliveryOtp = await generateUniqueOtp(listing._id);
     }
 
-    const ngoCoords = getCoordinatesForLocality(req.user.locality);
+    // Coordinates: prioritize client coordinates sent in body (from device GPS or Map search)
+    let ngoLat = (req.body.latitude !== undefined && req.body.latitude !== null)
+      ? Number(req.body.latitude)
+      : req.user.currentLocation?.latitude;
+    let ngoLng = (req.body.longitude !== undefined && req.body.longitude !== null)
+      ? Number(req.body.longitude)
+      : req.user.currentLocation?.longitude;
+    let ngoAddress = req.body.address || `${req.user.organizationName}, ${req.user.locality}, ${req.user.city}`;
+
+    if (!ngoLat || !ngoLng) {
+      const resolved = getCoordinatesForLocality(req.user.locality, req.user.city);
+      if (resolved) {
+        ngoLat = resolved.latitude;
+        ngoLng = resolved.longitude;
+      }
+    }
+
     listing.deliveryCoordinates = {
-      latitude: req.user.currentLocation?.latitude || ngoCoords.latitude,
-      longitude: req.user.currentLocation?.longitude || ngoCoords.longitude,
-      address: `${req.user.organizationName}, ${req.user.locality}, ${req.user.city}`,
+      latitude: ngoLat,
+      longitude: ngoLng,
+      address: ngoAddress,
+    };
+
+    // If NGO provided fresh GPS coordinates, update NGO user's profile as well
+    if (req.body.latitude && req.body.longitude) {
+      await User.findByIdAndUpdate(req.user._id, {
+        $set: {
+          'currentLocation.latitude': Number(req.body.latitude),
+          'currentLocation.longitude': Number(req.body.longitude),
+          'currentLocation.address': ngoAddress,
+          'currentLocation.updatedAt': new Date(),
+        },
+      });
+    }
+
+    // Real-time SMS dispatch to claiming NGO phone
+    const ngoPhone = req.user.phone || listing.contactPhone;
+    const smsResult = await sendOtpSms({
+      phone: ngoPhone,
+      otp: listing.deliveryOtp,
+      orderTitle: listing.title,
+      recipientName: req.user.organizationName || req.user.name,
+    });
+
+    listing.smsDispatch = {
+      sent: true,
+      phone: smsResult.phone,
+      message: smsResult.message,
+      sentAt: smsResult.sentAt,
+      status: 'Delivered',
     };
 
     // Automatically find and assign the nearest delivery partner!
@@ -347,6 +427,57 @@ router.patch('/:id/claim', protect, authorizeRoles('ngo'), async (req, res) => {
   } catch (error) {
     console.error('[Claim Listing Error]:', error);
     return res.status(500).json({ message: 'Server error claiming listing.', error: error.message });
+  }
+});
+
+/**
+ * @route   POST /api/food/:id/resend-sms-otp
+ * @desc    Resend the 4-digit handover OTP via SMS to the NGO recipient
+ * @access  Private (ngo or donor or delivery)
+ */
+router.post('/:id/resend-sms-otp', protect, async (req, res) => {
+  try {
+    const listing = await FoodListing.findById(req.params.id)
+      .populate('claimedBy', 'name organizationName phone email')
+      .populate('donor', 'name organizationName phone email');
+
+    if (!listing) {
+      return res.status(404).json({ message: 'Food order not found.' });
+    }
+
+    if (!listing.deliveryOtp || listing.deliveryOtp.trim() === '') {
+      listing.deliveryOtp = await generateUniqueOtp(listing._id);
+    }
+
+    const recipientPhone = listing.claimedBy?.phone || req.user.phone || listing.contactPhone;
+    const recipientName = listing.claimedBy?.organizationName || req.user.organizationName || 'NGO Partner';
+
+    const smsResult = await sendOtpSms({
+      phone: recipientPhone,
+      otp: listing.deliveryOtp,
+      orderTitle: listing.title,
+      recipientName,
+    });
+
+    listing.smsDispatch = {
+      sent: true,
+      phone: smsResult.phone,
+      message: smsResult.message,
+      sentAt: smsResult.sentAt,
+      status: 'Delivered',
+    };
+    await listing.save();
+
+    return res.json({
+      success: true,
+      message: `✅ SMS OTP successfully sent to ${smsResult.phone}!`,
+      deliveryOtp: listing.deliveryOtp,
+      smsDispatch: listing.smsDispatch,
+    });
+  } catch (error) {
+    console.error('[Resend SMS OTP Error]:', error);
+    return res.status(500).json({ message: 'Failed to send SMS OTP notification.' });
+  }
   }
 });
 

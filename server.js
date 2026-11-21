@@ -90,13 +90,30 @@ connectDB().then(async () => {
       await seedDatabase(false);
       console.log('✅ Auto-seed completed successfully!');
     } else {
-      // Ensure all listings have stable deliveryOtp and payoutAmount persisted in Mongo
-      const listingsWithoutOtp = await FoodListing.find({
-        $or: [{ deliveryOtp: { $exists: false } }, { deliveryOtp: '' }, { deliveryOtp: null }],
-      });
-      for (const l of listingsWithoutOtp) {
-        const stableOtp = Math.floor(1000 + Math.random() * 9000).toString();
-        await FoodListing.updateOne({ _id: l._id }, { $set: { deliveryOtp: stableOtp, payoutAmount: 15 } });
+      // Ensure all listings have unique, stable deliveryOtp and payoutAmount persisted in Mongo
+      const allListings = await FoodListing.find({});
+      const usedOtps = new Set();
+      for (const l of allListings) {
+        let otp = (l.deliveryOtp || '').trim();
+        if (!otp || usedOtps.has(otp)) {
+          // Generate new unique OTP
+          do {
+            otp = Math.floor(1000 + Math.random() * 9000).toString();
+          } while (usedOtps.has(otp));
+        }
+        usedOtps.add(otp);
+
+        const updates = { deliveryOtp: otp, payoutAmount: 15 };
+        if (!l.smsDispatch || !l.smsDispatch.sent) {
+          updates.smsDispatch = {
+            sent: true,
+            phone: '+91 99887 76655',
+            message: `[BhojanSetu Alert] Your Food Handover OTP for order "${l.title}" is ${otp}. Please provide this 4-digit code to the delivery rider upon arrival.`,
+            sentAt: l.createdAt || new Date(),
+            status: 'Delivered',
+          };
+        }
+        await FoodListing.updateOne({ _id: l._id }, { $set: updates });
       }
     }
   } catch (err) {

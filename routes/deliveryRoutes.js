@@ -5,6 +5,7 @@ const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 const { authorizeRoles } = require('../middleware/role');
 const { findAndAssignNearestDriver } = require('../utils/geoUtils');
+const { sendOtpSms } = require('../utils/smsService');
 
 /**
  * @route   GET /api/delivery/me/assigned
@@ -302,8 +303,10 @@ router.post('/:id/verify-otp', protect, authorizeRoles('delivery'), async (req, 
     }
 
     // Verify OTP match (safe, trimmed, and persistent)
-    const storedOtp = (listing.deliveryOtp || '').trim();
+    const storedOtp = (listing.deliveryOtp || '').toString().trim();
     const enteredOtp = otp.toString().trim();
+
+    console.log(`[Verify OTP] Listing: ${listing._id}, Stored: "${storedOtp}", Entered: "${enteredOtp}"`);
 
     if (!storedOtp) {
       // If legacy document had empty OTP, persist entered OTP
@@ -334,6 +337,52 @@ router.post('/:id/verify-otp', protect, authorizeRoles('delivery'), async (req, 
   } catch (error) {
     console.error('[Verify OTP Error]:', error);
     return res.status(500).json({ message: 'Server error verifying OTP.' });
+  }
+});
+
+/**
+ * @route   POST /api/delivery/:id/resend-sms-otp
+ * @desc    Resend SMS OTP to the recipient NGO on behalf of the delivery rider
+ * @access  Private (delivery only)
+ */
+router.post('/:id/resend-sms-otp', protect, authorizeRoles('delivery'), async (req, res) => {
+  try {
+    const listing = await FoodListing.findById(req.params.id)
+      .populate('claimedBy', 'name organizationName phone');
+
+    if (!listing) {
+      return res.status(404).json({ message: 'Mission not found.' });
+    }
+
+    if (!listing.assignedDriver || !listing.assignedDriver.equals(req.user._id)) {
+      return res.status(403).json({ message: 'Forbidden: You are not assigned to this mission.' });
+    }
+
+    const targetPhone = listing.claimedBy?.phone || listing.contactPhone;
+    const smsResult = await sendOtpSms({
+      phone: targetPhone,
+      otp: listing.deliveryOtp,
+      orderTitle: listing.title,
+      recipientName: listing.claimedBy?.organizationName || 'Recipient NGO',
+    });
+
+    listing.smsDispatch = {
+      sent: true,
+      phone: smsResult.phone,
+      message: smsResult.message,
+      sentAt: smsResult.sentAt,
+      status: 'Delivered',
+    };
+    await listing.save();
+
+    return res.json({
+      success: true,
+      message: `✅ SMS OTP resent to recipient NGO at ${smsResult.phone}!`,
+      smsDispatch: listing.smsDispatch,
+    });
+  } catch (error) {
+    console.error('[Delivery Resend SMS Error]:', error);
+    return res.status(500).json({ message: 'Failed to resend SMS.' });
   }
 });
 

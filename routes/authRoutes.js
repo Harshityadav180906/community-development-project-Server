@@ -59,12 +59,15 @@ router.post('/register', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Coordinate resolution
-    let coords = { latitude: 12.9716, longitude: 77.5946 };
+    // Coordinate resolution (prioritize device GPS / client coords or city locality)
+    let coords = { latitude: null, longitude: null };
     if (latitude && longitude) {
       coords = { latitude: Number(latitude), longitude: Number(longitude) };
     } else {
-      coords = getCoordinatesForLocality(locality);
+      const resolved = getCoordinatesForLocality(locality, city);
+      if (resolved) {
+        coords = resolved;
+      }
     }
 
     // Create user
@@ -178,6 +181,44 @@ router.get('/me', protect, async (req, res) => {
   } catch (error) {
     console.error('[Get Profile Error]:', error);
     return res.status(500).json({ message: 'Server error fetching user profile.' });
+  }
+});
+
+/**
+ * @route   PATCH /api/auth/me/location
+ * @desc    Update current user's GPS coordinates and address (device GPS or map search)
+ * @access  Private
+ */
+router.patch('/me/location', protect, async (req, res) => {
+  try {
+    const { latitude, longitude, address, locality, city } = req.body;
+    if (latitude === undefined || longitude === undefined) {
+      return res.status(400).json({ message: 'Latitude and longitude coordinates are required.' });
+    }
+
+    const updates = {
+      'currentLocation.latitude': Number(latitude),
+      'currentLocation.longitude': Number(longitude),
+      'currentLocation.address': address || '',
+      'currentLocation.updatedAt': new Date(),
+    };
+    if (locality) updates.locality = locality.trim();
+    if (city) updates.city = city.trim();
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: updates },
+      { new: true }
+    ).select('-password');
+
+    return res.json({
+      success: true,
+      message: 'Location updated successfully.',
+      user: updatedUser,
+    });
+  } catch (error) {
+    console.error('[User Location Update Error]:', error);
+    return res.status(500).json({ message: 'Server error updating location.' });
   }
 });
 

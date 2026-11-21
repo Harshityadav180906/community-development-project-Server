@@ -70,22 +70,22 @@ const foodListingSchema = new mongoose.Schema(
     pickupCoordinates: {
       latitude: {
         type: Number,
-        default: 12.9716,
+        default: null,
       },
       longitude: {
         type: Number,
-        default: 77.5946,
+        default: null,
       },
     },
     // Destination NGO Delivery Coordinates
     deliveryCoordinates: {
       latitude: {
         type: Number,
-        default: 12.9352,
+        default: null,
       },
       longitude: {
         type: Number,
-        default: 77.6245,
+        default: null,
       },
       address: {
         type: String,
@@ -118,6 +118,29 @@ const foodListingSchema = new mongoose.Schema(
       type: String,
       default: '',
       trim: true,
+    },
+    // SMS Notification Dispatch Record
+    smsDispatch: {
+      sent: {
+        type: Boolean,
+        default: false,
+      },
+      phone: {
+        type: String,
+        default: '',
+      },
+      message: {
+        type: String,
+        default: '',
+      },
+      sentAt: {
+        type: Date,
+        default: null,
+      },
+      status: {
+        type: String,
+        default: 'Pending',
+      },
     },
     otpVerified: {
       type: Boolean,
