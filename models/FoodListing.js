@@ -156,6 +156,15 @@ const foodListingSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // 15 km Delivery Service Radius Flag
+    isOutOfRadius: {
+      type: Boolean,
+      default: false,
+    },
+    radiusNotice: {
+      type: String,
+      default: '',
+    },
     driverAssignedAt: {
       type: Date,
       default: null,

@@ -231,9 +231,13 @@ router.post('/auto-assign/:id', protect, async (req, res) => {
       .populate('claimedBy', 'name organizationName phone locality city')
       .populate('assignedDriver', 'name phone vehicleType vehicleNumber currentLocation');
 
+    const msg = updated.isOutOfRadius
+      ? `Assigned delivery partner '${assigned.name}', but current distance is beyond 15 km. We are coming to your area soon! 🚀`
+      : `Successfully assigned nearest delivery partner '${assigned.name}'.`;
+
     return res.json({
       success: true,
-      message: `Successfully assigned nearest delivery partner '${assigned.name}'.`,
+      message: msg,
       data: updated,
     });
   } catch (error) {

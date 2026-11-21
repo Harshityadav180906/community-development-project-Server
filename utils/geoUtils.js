@@ -103,14 +103,23 @@ const findAndAssignNearestDriver = async (listing) => {
     driverDistances.sort((a, b) => a.distance - b.distance);
 
     const nearest = driverDistances[0];
+    const MAX_DELIVERY_RADIUS_KM = 15;
+    const isBeyondRadius = nearest.distance > MAX_DELIVERY_RADIUS_KM;
+
     console.log(
-      `[Auto-Assign] Assigned Driver '${nearest.driver.name}' (${nearest.distance} km away) to listing '${listing.title}'`
+      `[Auto-Assign] Assigned Driver '${nearest.driver.name}' (${nearest.distance} km away) to listing '${listing.title}'. ${
+        isBeyondRadius ? 'Out of 15km radius notice active.' : 'Within standard 15km radius.'
+      }`
     );
 
-    // Update listing
+    // Update listing with 15km radius awareness
     listing.assignedDriver = nearest.driver._id;
     listing.driverStatus = 'Assigned';
     listing.driverAssignedAt = new Date();
+    listing.isOutOfRadius = isBeyondRadius;
+    listing.radiusNotice = isBeyondRadius
+      ? `Outside 15 km delivery radius (${nearest.distance} km) — We are coming to your area soon! 🚀`
+      : 'Within 15 km active service zone';
     await listing.save();
 
     // Increment driver's active orders
