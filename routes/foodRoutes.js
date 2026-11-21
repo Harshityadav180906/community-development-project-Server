@@ -305,6 +305,9 @@ router.patch('/:id/claim', protect, authorizeRoles('ngo'), async (req, res) => {
     // Set Claim details & destination coordinates of the claiming NGO
     listing.status = 'Claimed';
     listing.claimedBy = req.user._id;
+    if (!listing.deliveryOtp) {
+      listing.deliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
+    }
 
     const ngoCoords = getCoordinatesForLocality(req.user.locality);
     listing.deliveryCoordinates = {

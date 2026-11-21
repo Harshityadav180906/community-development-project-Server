@@ -15,11 +15,11 @@ router.get('/me/assigned', protect, authorizeRoles('delivery'), async (req, res)
   try {
     const activeMissions = await FoodListing.find({
       assignedDriver: req.user._id,
-      driverStatus: { $in: ['Assigned', 'Heading to Pickup', 'Picked Up'] },
+      driverStatus: { $in: ['Assigned', 'Heading to Pickup', 'Picked Up', 'Reached Dropoff'] },
     })
       .populate('donor', 'name organizationName phone locality city pickupAddress')
       .populate('claimedBy', 'name organizationName phone locality city')
-      .populate('assignedDriver', 'name phone vehicleType vehicleNumber currentLocation')
+      .populate('assignedDriver', 'name phone vehicleType vehicleNumber currentLocation walletBalance')
       .sort({ updatedAt: -1 });
 
     return res.json({
@@ -239,6 +239,204 @@ router.post('/auto-assign/:id', protect, async (req, res) => {
   } catch (error) {
     console.error('[Auto Assign Trigger Error]:', error);
     return res.status(500).json({ message: 'Server error auto-assigning delivery partner.' });
+  }
+});
+
+/**
+ * @route   GET /api/delivery/me/wallet
+ * @desc    Get rider's live wallet balance and compensation stats
+ * @access  Private (delivery only)
+ */
+router.get('/me/wallet', protect, authorizeRoles('delivery'), async (req, res) => {
+  try {
+    const rider = await User.findById(req.user._id).select(
+      'name walletBalance totalEarnings completedDeliveriesCount vehicleType vehicleNumber'
+    );
+    return res.json({
+      success: true,
+      data: {
+        walletBalance: rider.walletBalance || 0,
+        totalEarnings: rider.totalEarnings || 0,
+        completedDeliveriesCount: rider.completedDeliveriesCount || 0,
+        ratePerDelivery: 15,
+      },
+    });
+  } catch (error) {
+    console.error('[Delivery Wallet Error]:', error);
+    return res.status(500).json({ message: 'Server error retrieving rider wallet.' });
+  }
+});
+
+/**
+ * @route   POST /api/delivery/:id/verify-otp
+ * @desc    Verify handover OTP provided by NGO recipient before unlocking payment
+ * @access  Private (delivery only)
+ */
+router.post('/:id/verify-otp', protect, authorizeRoles('delivery'), async (req, res) => {
+  try {
+    const { otp } = req.body;
+    if (!otp) {
+      return res.status(400).json({ message: 'Please provide the 4-digit verification OTP.' });
+    }
+
+    const listing = await FoodListing.findById(req.params.id);
+    if (!listing) {
+      return res.status(404).json({ message: 'Food mission not found.' });
+    }
+
+    if (!listing.assignedDriver || !listing.assignedDriver.equals(req.user._id)) {
+      return res.status(403).json({ message: 'Forbidden: You are not assigned to this rescue mission.' });
+    }
+
+    // Verify OTP match
+    if (listing.deliveryOtp && listing.deliveryOtp.trim() !== otp.toString().trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid OTP! Please check the code displayed on the NGO portal or SMS.',
+      });
+    }
+
+    listing.otpVerified = true;
+    listing.otpVerifiedAt = new Date();
+    listing.driverStatus = 'Reached Dropoff';
+    await listing.save();
+
+    const populated = await FoodListing.findById(listing._id)
+      .populate('donor', 'name organizationName phone locality city pickupAddress')
+      .populate('claimedBy', 'name organizationName phone locality city')
+      .populate('assignedDriver', 'name phone vehicleType vehicleNumber currentLocation walletBalance');
+
+    return res.json({
+      success: true,
+      message: '✅ OTP verified successfully! Delivery payment section unlocked.',
+      data: populated,
+    });
+  } catch (error) {
+    console.error('[Verify OTP Error]:', error);
+    return res.status(500).json({ message: 'Server error verifying OTP.' });
+  }
+});
+
+/**
+ * @route   POST /api/delivery/:id/confirm-payment
+ * @desc    Confirm delivery compensation (₹15 via UPI or Cash)
+ * @access  Private (delivery only)
+ */
+router.post('/:id/confirm-payment', protect, authorizeRoles('delivery'), async (req, res) => {
+  try {
+    const { paymentMethod } = req.body; // 'UPI' or 'Cash'
+
+    if (!['UPI', 'Cash'].includes(paymentMethod)) {
+      return res.status(400).json({ message: 'Invalid payment method. Choose UPI or Cash.' });
+    }
+
+    const listing = await FoodListing.findById(req.params.id);
+    if (!listing) {
+      return res.status(404).json({ message: 'Food mission not found.' });
+    }
+
+    if (!listing.assignedDriver || !listing.assignedDriver.equals(req.user._id)) {
+      return res.status(403).json({ message: 'Forbidden: You are not assigned to this rescue mission.' });
+    }
+
+    if (!listing.otpVerified) {
+      return res.status(400).json({
+        message: 'OTP verification is required before processing payment confirmation.',
+      });
+    }
+
+    listing.paymentStatus = paymentMethod === 'Cash' ? 'Paid_Cash' : 'Paid_UPI';
+    listing.paymentMethod = paymentMethod;
+    listing.payoutAmount = 15;
+    listing.paymentCompletedAt = new Date();
+    await listing.save();
+
+    const populated = await FoodListing.findById(listing._id)
+      .populate('donor', 'name organizationName phone locality city pickupAddress')
+      .populate('claimedBy', 'name organizationName phone locality city')
+      .populate('assignedDriver', 'name phone vehicleType vehicleNumber currentLocation walletBalance');
+
+    return res.json({
+      success: true,
+      message: `✅ ₹15 ${paymentMethod} payment confirmed! Photo proof upload section unlocked.`,
+      data: populated,
+    });
+  } catch (error) {
+    console.error('[Confirm Payment Error]:', error);
+    return res.status(500).json({ message: 'Server error confirming payment.' });
+  }
+});
+
+/**
+ * @route   POST /api/delivery/:id/upload-proof
+ * @desc    Upload food handover photo proof & finalize delivery with ₹15 rider payout
+ * @access  Private (delivery only)
+ */
+router.post('/:id/upload-proof', protect, authorizeRoles('delivery'), async (req, res) => {
+  try {
+    const { photo } = req.body;
+    if (!photo) {
+      return res.status(400).json({ message: 'Please capture or upload a photo of the food delivery.' });
+    }
+
+    const listing = await FoodListing.findById(req.params.id);
+    if (!listing) {
+      return res.status(404).json({ message: 'Food mission not found.' });
+    }
+
+    if (!listing.assignedDriver || !listing.assignedDriver.equals(req.user._id)) {
+      return res.status(403).json({ message: 'Forbidden: You are not assigned to this rescue mission.' });
+    }
+
+    if (!listing.otpVerified) {
+      return res.status(400).json({ message: 'Handover OTP must be verified first.' });
+    }
+
+    if (listing.paymentStatus === 'Pending') {
+      return res.status(400).json({ message: 'Delivery payment confirmation is required before photo submission.' });
+    }
+
+    // Save proof photo and finalize order
+    listing.deliveryProofPhoto = photo;
+    listing.deliveryProofPhotoUploadedAt = new Date();
+    listing.driverStatus = 'Delivered';
+    listing.status = 'Completed';
+    listing.deliveredAt = new Date();
+    await listing.save();
+
+    // Credit ₹15 compensation to Rider wallet & increment delivery count
+    const updatedDriver = await User.findByIdAndUpdate(
+      req.user._id,
+      {
+        $inc: {
+          walletBalance: 15,
+          totalEarnings: 15,
+          completedDeliveriesCount: 1,
+          activeOrdersCount: -1,
+        },
+        $set: { isAvailable: true },
+      },
+      { new: true }
+    ).select('-password');
+
+    const populated = await FoodListing.findById(listing._id)
+      .populate('donor', 'name organizationName phone locality city pickupAddress')
+      .populate('claimedBy', 'name organizationName phone locality city')
+      .populate('assignedDriver', 'name phone vehicleType vehicleNumber currentLocation walletBalance');
+
+    return res.json({
+      success: true,
+      message: '🎉 Food handover proof verified! ₹15 has been credited to your Rider Wallet.',
+      data: populated,
+      wallet: {
+        walletBalance: updatedDriver.walletBalance,
+        totalEarnings: updatedDriver.totalEarnings,
+        completedDeliveriesCount: updatedDriver.completedDeliveriesCount,
+      },
+    });
+  } catch (error) {
+    console.error('[Upload Proof Error]:', error);
+    return res.status(500).json({ message: 'Server error processing delivery photo proof.' });
   }
 });
 

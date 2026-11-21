@@ -18,8 +18,8 @@ app.use(
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ limit: '15mb', extended: true }));
 
 // Request logging in development
 if (process.env.NODE_ENV !== 'production') {
@@ -58,6 +58,7 @@ app.all('/api/seed', async (req, res) => {
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/food', require('./routes/foodRoutes'));
 app.use('/api/delivery', require('./routes/deliveryRoutes'));
+app.use('/api/admin', require('./routes/adminRoutes'));
 
 // 404 Not Found Handler
 app.use((req, res, next) => {

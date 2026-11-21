@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const dotenv = require('dotenv');
 const User = require('../models/User');
 const FoodListing = require('../models/FoodListing');
+const Ticket = require('../models/Ticket');
 
 dotenv.config();
 
@@ -17,7 +18,8 @@ const seedDatabase = async (clearExisting = true) => {
     if (clearExisting) {
       await User.deleteMany({});
       await FoodListing.deleteMany({});
-      console.log('[Seed] Cleared existing users and food listings.');
+      await Ticket.deleteMany({});
+      console.log('[Seed] Cleared existing users, food listings, and tickets.');
     }
 
     // Password hash for demo users
@@ -122,6 +124,9 @@ const seedDatabase = async (clearExisting = true) => {
         vehicleNumber: 'KA-01-AB-1234',
         isAvailable: true,
         activeOrdersCount: 1,
+        walletBalance: 45,
+        totalEarnings: 45,
+        completedDeliveriesCount: 3,
         currentLocation: {
           latitude: 12.9750,
           longitude: 77.6350,
@@ -142,6 +147,9 @@ const seedDatabase = async (clearExisting = true) => {
         vehicleNumber: 'KA-03-CD-5678',
         isAvailable: true,
         activeOrdersCount: 0,
+        walletBalance: 15,
+        totalEarnings: 15,
+        completedDeliveriesCount: 1,
         currentLocation: {
           latitude: 12.9300,
           longitude: 77.6200,
@@ -151,8 +159,25 @@ const seedDatabase = async (clearExisting = true) => {
       },
     ]);
 
+    // 4. Create Super Admin / Company Team Member
+    const admin = await User.create({
+      name: 'Harshit Yadav (Super Admin)',
+      email: 'admin@bhojansetu.org',
+      password: demoHashedPassword,
+      organizationName: 'BhojanSetu Central Operations HQ',
+      role: 'admin',
+      phone: '+91 90000 11111',
+      locality: 'Central Operations Command, MG Road',
+      city: 'Bengaluru',
+      currentLocation: {
+        latitude: 12.9756,
+        longitude: 77.6066,
+        address: 'BhojanSetu Central Tower, MG Road',
+      },
+    });
+
     console.log(
-      `[Seed] Created ${donors.length} donors, ${ngos.length} NGOs, and ${deliveryPartners.length} delivery partners.`
+      `[Seed] Created ${donors.length} donors, ${ngos.length} NGOs, ${deliveryPartners.length} delivery partners, and 1 Super Admin.`
     );
 
     const now = new Date();
@@ -250,6 +275,10 @@ const seedDatabase = async (clearExisting = true) => {
         },
         assignedDriver: deliveryPartners[0]._id,
         driverStatus: 'Heading to Pickup',
+        deliveryOtp: '8291',
+        otpVerified: false,
+        paymentStatus: 'Pending',
+        payoutAmount: 15,
         driverAssignedAt: hoursAgo(0.5),
       },
       {
@@ -273,20 +302,74 @@ const seedDatabase = async (clearExisting = true) => {
         },
         assignedDriver: deliveryPartners[1]._id,
         driverStatus: 'Delivered',
+        deliveryOtp: '4532',
+        otpVerified: true,
+        otpVerifiedAt: hoursAgo(4.2),
+        paymentStatus: 'Paid_UPI',
+        paymentMethod: 'UPI',
+        payoutAmount: 15,
+        paymentCompletedAt: hoursAgo(4.1),
+        deliveryProofPhoto: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80',
+        deliveryProofPhotoUploadedAt: hoursAgo(4.0),
         driverAssignedAt: hoursAgo(6),
         pickedUpAt: hoursAgo(5),
         deliveredAt: hoursAgo(4),
       },
     ];
 
-    await FoodListing.insertMany(listings);
-    console.log(`[Seed] Seeded ${listings.length} sample surplus food listings with GPS coordinates.`);
+    const createdListings = await FoodListing.insertMany(listings);
+    console.log(`[Seed] Seeded ${createdListings.length} sample surplus food listings with GPS coordinates.`);
+
+    // 5. Seed Support Tickets for Super Admin / Company Team Member
+    const tickets = [
+      {
+        ticketId: 'TKT-1001',
+        title: 'Driver landmark assistance needed near Loading Dock B',
+        description: 'Rider Ramesh requested gate pass verification to enter Green Palace service alley for biryani pickup.',
+        category: 'Address & Navigation',
+        priority: 'Medium',
+        status: 'Resolved',
+        relatedOrder: createdListings[4]._id,
+        createdBy: deliveryPartners[0]._id,
+        assignedTo: admin._id,
+        resolutionNotes: 'Gate pass authorized via security call with donor Chef Rajesh. Rider entered without delay.',
+        resolvedAt: hoursAgo(1),
+      },
+      {
+        ticketId: 'TKT-1002',
+        title: 'Handover OTP automated dispatch confirmation for Anna Seva',
+        description: 'NGO coordinator verified SMS delivery of OTP 4532 on recipient volunteer phone +91 99112 23344.',
+        category: 'OTP Verification',
+        priority: 'Low',
+        status: 'Closed',
+        relatedOrder: createdListings[5]._id,
+        createdBy: ngos[1]._id,
+        assignedTo: admin._id,
+        resolutionNotes: 'OTP matched successfully and verified by rider Sunil Reddy upon arrival.',
+        resolvedAt: hoursAgo(3.8),
+      },
+      {
+        ticketId: 'TKT-1003',
+        title: 'Instant ₹15 delivery fee credit inquiry for Rider Ramesh',
+        description: 'Automated verification check that ₹15 was queued for UPI settlement once food photo proof is captured.',
+        category: 'Payment & Payout',
+        priority: 'High',
+        status: 'Open',
+        relatedOrder: createdListings[4]._id,
+        createdBy: deliveryPartners[0]._id,
+        assignedTo: null,
+      },
+    ];
+
+    await Ticket.insertMany(tickets);
+    console.log(`[Seed] Seeded ${tickets.length} operational company support tickets.`);
 
     return {
       donorsCount: donors.length,
       ngosCount: ngos.length,
       deliveryCount: deliveryPartners.length,
-      listingsCount: listings.length,
+      listingsCount: createdListings.length,
+      ticketsCount: tickets.length,
     };
   } catch (error) {
     console.error('[Seed Error]:', error);
@@ -304,6 +387,7 @@ if (require.main === module) {
       console.log('  👨‍🍳 Donor: donor@tajkitchen.com (Password123!)');
       console.log('  🤝 NGO: ngo@feedingindia.org (Password123!)');
       console.log('  🚚 Delivery: driver@bhojansetu.org (Password123!)');
+      console.log('  👑 Admin / Company Team: admin@bhojansetu.org (Password123!)');
       console.log('======================================================\n');
       process.exit(0);
     })

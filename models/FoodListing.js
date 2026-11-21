@@ -106,11 +106,55 @@ const foodListingSchema = new mongoose.Schema(
           'Assigned',
           'Heading to Pickup',
           'Picked Up',
+          'Reached Dropoff',
           'Delivered',
         ],
         message: 'Invalid driver status value',
       },
       default: 'Unassigned',
+    },
+    // Delivery Handover Verification OTP (shared with NGO)
+    deliveryOtp: {
+      type: String,
+      default: function () {
+        return Math.floor(1000 + Math.random() * 9000).toString();
+      },
+    },
+    otpVerified: {
+      type: Boolean,
+      default: false,
+    },
+    otpVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+    // Payment Section (₹15 Delivery Compensation via UPI or Cash)
+    payoutAmount: {
+      type: Number,
+      default: 15,
+    },
+    paymentStatus: {
+      type: String,
+      enum: ['Pending', 'Paid_UPI', 'Paid_Cash'],
+      default: 'Pending',
+    },
+    paymentMethod: {
+      type: String,
+      enum: ['UPI', 'Cash', 'None'],
+      default: 'None',
+    },
+    paymentCompletedAt: {
+      type: Date,
+      default: null,
+    },
+    // Proof of Delivery Food Photo
+    deliveryProofPhoto: {
+      type: String,
+      default: '',
+    },
+    deliveryProofPhotoUploadedAt: {
+      type: Date,
+      default: null,
     },
     driverAssignedAt: {
       type: Date,

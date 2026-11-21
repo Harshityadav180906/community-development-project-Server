@@ -33,8 +33,8 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Please specify your role'],
       enum: {
-        values: ['donor', 'ngo', 'delivery'],
-        message: 'Role must be either donor, ngo, or delivery',
+        values: ['donor', 'ngo', 'delivery', 'admin'],
+        message: 'Role must be either donor, ngo, delivery, or admin',
       },
     },
     phone: {
@@ -68,6 +68,19 @@ const userSchema = new mongoose.Schema(
       default: true,
     },
     activeOrdersCount: {
+      type: Number,
+      default: 0,
+    },
+    // Rider Earnings & Wallet Balance (₹15 per completed delivery)
+    walletBalance: {
+      type: Number,
+      default: 0,
+    },
+    totalEarnings: {
+      type: Number,
+      default: 0,
+    },
+    completedDeliveriesCount: {
       type: Number,
       default: 0,
     },
